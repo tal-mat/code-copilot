@@ -1,0 +1,36 @@
+﻿# Code Copilot (CodeSearchNet) - packages used by codesearchnet_copilot_full.ipynb
+# Install: pip install -r requirements.txt
+# Recommended: Google Colab with a GPU runtime (torch is usually preinstalled there).
+
+# Data / plotting
+datasets
+pandas
+numpy
+matplotlib
+seaborn
+pyarrow
+scikit-learn
+tqdm
+
+# Transformers / LoRA
+sentence-transformers
+transformers>=4.46
+accelerate
+peft
+sentencepiece
+torch
+
+# Retrieval / Chroma
+langdetect
+rank_bm25
+rouge-score
+chromadb
+opentelemetry-api>=1.39,<=1.42.1
+opentelemetry-sdk>=1.39,<=1.42.1
+opentelemetry-exporter-otlp-proto-grpc>=1.39,<=1.42.1
+
+# Optional LLM judges (Section 14) + quantization helpers
+openai
+google-genai
+bitsandbytes
+torchao>=0.16.0
