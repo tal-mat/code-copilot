@@ -13,6 +13,7 @@ Built for *AI and Deep Learning Models Development* (Applied Languages Model), G
 | **Generator** | `Qwen/Qwen2.5-Coder-3B-Instruct` (**base**, no LoRA shipped) |
 | **Retriever** | `sentence-transformers/all-MiniLM-L6-v2` + Chroma |
 | **Notebook** | [`codesearchnet_copilot_full.ipynb`](codesearchnet_copilot_full.ipynb) |
+| **Report** | [`Project_Report_English.pdf`](Project_Report_English.pdf) |
 
 ### Headline results
 
@@ -51,11 +52,18 @@ query
 | Source | CodeSearchNet Python ([paper](https://arxiv.org/abs/1909.09436)) |
 | Splits | Official `train` / `validation`→`val` / `test` (**repo-disjoint**) |
 | Unit | One function: docstring + code |
+| After filter | **347,590** chunks — train 313,620 (90.2%) / val 17,007 (4.9%) / test 16,963 (4.9%) |
 | Pipeline use | Full splits for filter → chunk → embed → Chroma |
 | LoRA data | Repo-capped, detail-filtered subsample of `train` (~400–4k depending on run; live retrain uses ~1.2k) |
 | Eval holdout | `test` untouched until Section 14 |
 
-Preprocessing: empty/placeholder docs, near-duplicates, non-English docs (`langdetect`), then a **512-token** doc+code budget (MiniLM tokenizer).
+**Preprocessing** (applied to all three splits, in order):
+
+1. Empty/placeholder docs removed; exact duplicate code kept only in the highest-priority split (`train` > `val` > `test`)
+2. Non-English docs removed (`langdetect`)
+3. Combined **512-token** doc+code budget (MiniLM tokenizer — matches the embedder’s context length)
+
+Each row becomes a chunk with two parallel fields: `chunk_text` (docstring + full code) for embedding/display, and `func_code_no_doc` for generation so the model must write the docstring instead of copying it. Both live in the same Chroma store.
 
 ---
 
@@ -64,14 +72,14 @@ Preprocessing: empty/placeholder docs, near-duplicates, non-English docs (`langd
 ### Retrieval (RAG)
 
 - Embedder: `all-MiniLM-L6-v2`
-- Store: persistent **Chroma** (metadata includes stripped code for generation)
+- Store: persistent **Chroma** (metadata includes `func_code_no_doc` for generation)
 - Metrics: Hit@k (k=1,5,10), MRR; BM25 and paraphrase probes as sanity checks
 
 ### Generation + LoRA study
 
-- Base: `Qwen/Qwen2.5-Coder-3B-Instruct` (chosen after an 8-model screen; `code→doc` preferred over `doc→code`)
-- Adapters: PEFT LoRA; strongest live candidate `r=8`, `α=16`, `lr=1.5e-4`, 2 epochs, attn modules `q/k/v/o_proj`, ~1.2k detail-filtered rows
-- Scoring: ROUGE-L, embedding cosine, GPT-4o-mini judge, Gemini judge (1–5)
+- Base: `Qwen/Qwen2.5-Coder-3B-Instruct` — 8-model screen; `code→doc` preferred (mean GPT judge ~2.94 vs ~2.29). On a five-metric composite, Llama-3.2-3B and Qwen tied; bootstrap showed Llama’s edge was mainly ROUGE-L, so Qwen won on practical grounds (ungated HF access + code-specialized pretraining)
+- Adapters: PEFT LoRA on attention only (`q/k/v/o_proj`); loss on the response tokens only. Strongest live candidate `r=8`, `α=16`, `lr=1.5e-4`, ≤2 epochs, ~1.2k detail-filtered rows (earlier runs used ~400)
+- Scoring: ROUGE-L, embedding cosine, GPT-4o-mini judge, Gemini judge (1–5); bootstrap 95% CIs on judge deltas
 
 ### Agent
 
@@ -110,7 +118,7 @@ Figures below are exported from the executed notebook (`docs/figures/`). Full ta
 
 ### 2. Model screen (why Qwen + code→doc)
 
-Eight small code LMs × two directions on 20 samples. `code→doc` was the higher-quality direction for every model (mean GPT judge ~2.94 vs ~2.29). Selected generator: **Qwen2.5-Coder-3B-Instruct**.
+Eight small LMs × two directions on 20 samples. `code→doc` was higher quality for every model (mean GPT judge ~2.94 vs ~2.29). Phi led on GPT alone; a five-metric composite tied **Llama-3.2-3B** and **Qwen2.5-Coder-3B**. Paired bootstrap (5k resamples) showed Llama’s consistent edge was mainly ROUGE-L — Qwen was selected as the shipped generator.
 
 ![Model screen ROUGE / judge](docs/figures/02_model_screen_code2doc.png)
 
@@ -189,10 +197,20 @@ Design intent: a wrong confident explanation is worse than an honest skip. Grep 
 
 ## Limitations
 
-1. **Query distribution shift** — benchmark Hit@k is dominated by docstring-like queries; ordinary paraphrases are much harder (Section 5 probe).
-2. **Metric disagreement** — optimizing ROUGE-L alone would incorrectly ship LoRA; LLM judges reverse that ranking (and occasionally disagree with each other on *which* answers got worse).
-3. **Small judge samples** — live TEST generation compare uses n=40; agent batch n=60. Direction is consistent with the 16-run history, but intervals are wide.
-4. **No private-repo checkout** — agent tools operate over the indexed CodeSearchNet corpus / retrieved candidates, not an arbitrary local git tree.
+1. **Query distribution shift** — Hit@k and agent batches use docstring-style queries; ordinary paraphrases are much harder (Section 5 probe: Hit@1 → 0/8). Real-user NL performance is likely lower than the reported numbers.
+2. **Metric disagreement** — optimizing ROUGE-L alone would incorrectly ship LoRA; both LLM judges reverse that ranking. Judges agree on the *trend*, but a manual check of the largest score drops agreed on specific answers in only ~38% of cases — single-answer judge scores are noisy.
+3. **Small samples (Colab GPU budget)** — LoRA train ~1.2k of 313,620 train rows; live TEST generation compare n=40; agent batch n=60. Direction matches the 16-run history, but this is a directional signal, not a full-scale study.
+4. **Target-rewrite pilot** — GPT-4o-rewritten training docs narrowed the Gemini gap vs base (≈ −0.49 → −0.04) but not the GPT judge gap; docstring quality vs training method remains ambiguous.
+5. **Abstention vs parametric knowledge** — the agent abstains on weak retrieval even when the base model might already “know” a useful answer.
+6. **No private-repo checkout** — tools operate over the indexed CodeSearchNet corpus / retrieved candidates, not an arbitrary local git tree.
+
+---
+
+## Future directions
+
+- Close the docstring↔natural-language retrieval gap for real user questions.
+- Reduce unnecessary abstentions when retrieval is weak but a grounded answer is still possible (extra tools / fallbacks).
+- Scale the target-rewrite pilot and try larger or differently constructed LoRA sets.
 
 ---
 
@@ -226,6 +244,9 @@ pip install -r requirements.txt
 
 Then run the notebook with a GPU if available. Artifacts write to `codesearchnet_copilot_full_artifacts/` (also packed as `codesearchnet_copilot_full_artifacts.zip`).
 
+**Prebuilt artifacts ZIP** (too large for GitHub; not everyone can upload it):  
+[Download from Google Drive](https://drive.google.com/file/d/1OlCtAScdpZAQaMR4cBCzcNR_2TSOHRvF/view?usp=sharing)
+
 ---
 
 ## Repository layout
@@ -233,7 +254,8 @@ Then run the notebook with a GPU if available. Artifacts write to `codesearchnet
 ```text
 code-copilot/
   codesearchnet_copilot_full.ipynb
-  codesearchnet_copilot_full_artifacts.zip
+  codesearchnet_copilot_full_artifacts.zip  # optional local copy; see Drive link in Setup
+  Project_Report_English.pdf    # full write-up (aligned with this README)
   docs/figures/                 # plots embedded in this README
   experiments/                  # staged notebooks
   requirements.txt
@@ -246,3 +268,4 @@ code-copilot/
 
 - Husain, H., Wu, H.-H., Gazit, T., Allamanis, M., & Brockschmidt, M. (2019). *CodeSearchNet challenge: Evaluating the state of semantic code search*. [arXiv:1909.09436](https://arxiv.org/abs/1909.09436)
 - [CodeSearchNet on Hugging Face](https://huggingface.co/datasets/code-search-net/code_search_net) · [GitHub](https://github.com/github/CodeSearchNet)
+- Project write-up: [`Project_Report_English.pdf`](Project_Report_English.pdf)
